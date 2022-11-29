@@ -6,7 +6,6 @@
 # A minimal example using Theseus that is fitting a curve to a dataset of observations.
 
 import torch
-
 import theseus as th
 
 
@@ -37,6 +36,7 @@ def error_fn(optim_vars, aux_vars):  # returns y - v * exp(x)
     return y.tensor - optim_vars[0].tensor * torch.exp(x.tensor)
 
 
+# Auxiliary variables (x and y here) remain _constant_ to Theseus optimizers.
 objective = th.Objective()
 cost_function = th.AutoDiffCostFunction(
     [v], error_fn, y_true.shape[1], aux_vars=[x, y], cost_weight=th.ScaleCostWeight(1.0)
@@ -46,12 +46,19 @@ layer = th.TheseusLayer(th.GaussNewton(objective, max_iterations=10))
 
 phi = torch.nn.Parameter(x_true + 0.1 * torch.ones_like(x_true))
 outer_optimizer = torch.optim.Adam([phi], lr=0.001)
-for epoch in range(20):
+for epoch in range(100):
+    # Note: the `forward` method does the `update()` I think.
+    # It combines `Objective.update()` and `Optimizer.optimize()`.
     solution, info = layer.forward(
         input_tensors={"x": phi.clone(), "v": torch.ones(1, 1)},
         optimizer_kwargs={"backward_mode": "implicit"},
     )
+    print(f'\nEpoch: {epoch}')
+    print("Phi before: ", phi)
     outer_loss = torch.nn.functional.mse_loss(solution["v"], v_true)
     outer_loss.backward()
     outer_optimizer.step()
     print("Outer loss: ", outer_loss.item())
+    print("Solution: ", solution)
+    print("Phi after: ", phi)
+    print("Objective value: ", objective.error_squared_norm())
