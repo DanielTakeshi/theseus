@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Type, Union
 
 import torch
 
+from theseus.constants import DeviceType
 from theseus.core import Objective
 from theseus.optimizer import Linearization, SparseLinearization
 from theseus.optimizer.autograd import BaspachoSolveFunction
@@ -26,8 +27,7 @@ class BaspachoSparseSolver(LinearSolver):
         objective: Objective,
         linearization_cls: Optional[Type[Linearization]] = None,
         linearization_kwargs: Optional[Dict[str, Any]] = None,
-        num_solver_contexts=1,
-        dev=DEFAULT_DEVICE,
+        dev: DeviceType = DEFAULT_DEVICE,
         **kwargs,
     ):
         linearization_cls = linearization_cls or SparseLinearization
@@ -40,12 +40,14 @@ class BaspachoSparseSolver(LinearSolver):
         super().__init__(objective, linearization_cls, linearization_kwargs, **kwargs)
         self.linearization: SparseLinearization = self.linearization
 
-        self._num_solver_contexts: int = num_solver_contexts
-
+        self._has_been_reset = False
         if self.linearization.structure().num_rows:
             self.reset(dev)
 
-    def reset(self, dev=DEFAULT_DEVICE):
+    def reset(self, dev: DeviceType = DEFAULT_DEVICE, **kwargs):
+        if self._has_been_reset:
+            return
+        self._has_been_reset = True
         if dev == "cuda" and not torch.cuda.is_available():
             raise RuntimeError(
                 "BaspachoSparseSolver: Cuda requested (dev='cuda') but not\n"
@@ -63,10 +65,10 @@ class BaspachoSparseSolver(LinearSolver):
             )
 
         # convert to tensors for accelerated Mt x M operation
-        self.A_rowPtr = torch.tensor(
+        self.A_row_ptr = torch.tensor(
             self.linearization.structure().row_ptr, dtype=torch.int64
         ).to(dev)
-        self.A_colInd = torch.tensor(
+        self.A_col_ind = torch.tensor(
             self.linearization.structure().col_ind, dtype=torch.int64
         ).to(dev)
 
@@ -124,8 +126,8 @@ class BaspachoSparseSolver(LinearSolver):
             self.linearization.A_val,
             self.linearization.b,
             self.linearization.structure(),
-            self.A_rowPtr,
-            self.A_colInd,
+            self.A_row_ptr,
+            self.A_col_ind,
             self.symbolic_decomposition,
             damping_alpha_beta,
         )
