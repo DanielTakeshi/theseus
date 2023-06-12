@@ -19,10 +19,18 @@ try:
     #   -ltorch_cuda_cu -ltorch_cuda_cpp
     torch_cpp_ext.BUILD_SPLIT_CUDA = False
 
-    # hack to be able to compile with gcc-8.4.0
-    torch_cpp_ext.CUDA_GCC_VERSIONS["10.2"] = (
-        torch_cpp_ext.MINIMUM_GCC_VERSION,
-        (8, 4, 99),
+    if hasattr(torch_cpp_ext, "CUDA_GCC_VERSIONS"):
+        # hack to be able to compile with gcc-8.4.0
+        torch_cpp_ext.CUDA_GCC_VERSIONS["10.2"] = (
+            torch_cpp_ext.MINIMUM_GCC_VERSION,
+            (8, 4, 99),
+        )
+
+    torch_version = torch.__version__.split(".")
+    torch_geq_113 = (
+        int(torch_version[0]) > 1
+        or int(torch_version[0]) == 1
+        and int(torch_version[1]) >= 13
     )
 except ModuleNotFoundError:
     print("Theseus installation requires torch.")
@@ -33,8 +41,12 @@ def parse_requirements_file(path):
     with open(path) as f:
         reqs = []
         for line in f:
+            if "functorch" in line and torch_geq_113:
+                # Don't install functorch 0.2.1 if torch 1.13 already
+                # installed
+                continue
             line = line.strip()
-            reqs.append(line.split("==")[0])
+            reqs.append(line)
     return reqs
 
 
@@ -82,10 +94,26 @@ reqs_main = parse_requirements_file("requirements/main.txt")
 reqs_dev = parse_requirements_file("requirements/dev.txt")
 root_dir = Path(__file__).parent
 
-with open(Path("theseus") / "__init__.py", "r") as f:
-    for line in f:
-        if "__version__" in line:
-            version = line.split("__version__ = ")[1].rstrip().strip('"')
+is_nightly = False
+nightly_date_str = os.environ.get("THESEUS_NIGHTLY", None)
+if nightly_date_str is not None:
+    from datetime import date, datetime
+
+    nightly_date = datetime.strptime(nightly_date_str, "%Y.%m.%d").date()
+    assert nightly_date == date.today(), (
+        f"THESEUS_NIGHTLY must be set to today's date in format %Y.%-m.%-d (stripped) "
+        f"but got {nightly_date_str}."
+    )
+    print(f"Building nightly with date {nightly_date_str}")
+    is_nightly = True
+
+if is_nightly:
+    version = nightly_date_str
+else:
+    with open(Path("theseus") / "__init__.py", "r") as f:
+        for line in f:
+            if "__version__" in line:
+                version = line.split("__version__ = ")[1].rstrip().strip('"')
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
@@ -126,8 +154,13 @@ baspacho_extension = maybe_create_baspacho_extension(compile_cuda_support)
 if baspacho_extension is not None:
     ext_modules.append(baspacho_extension)
 
+excluded_packages = []
+package_name = "theseus-ai-nightly" if is_nightly else "theseus-ai"
+if not os.environ.get("INCLUDE_THESEUS_LABS") and not is_nightly:
+    excluded_packages.append("theseus.labs")
+    print("Excluding theseus.labs")
 setuptools.setup(
-    name="theseus-ai",
+    name=package_name,
     version=version,
     author="Meta Research",
     description="A library for differentiable nonlinear optimization.",
@@ -135,14 +168,14 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/facebookresearch/theseus",
     keywords="differentiable optimization, nonlinear least squares, factor graphs",
-    packages=setuptools.find_packages(),
+    packages=setuptools.find_packages(exclude=tuple(excluded_packages)),
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
-    python_requires=">=3.7",
+    python_requires=">=3.8",
     install_requires=reqs_main,
     extras_require={"dev": reqs_main + reqs_dev},
     cmdclass={"build_ext": torch_cpp_ext.BuildExtension},

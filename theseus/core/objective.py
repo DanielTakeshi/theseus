@@ -2,11 +2,20 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
-
 import itertools
 import warnings
 from collections import OrderedDict
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Union,
+)
 
 import torch
 
@@ -19,11 +28,25 @@ from .cost_weight import CostWeight
 from .variable import Variable
 
 
+class ErrorMetric(Protocol):
+    def __call__(self, error_vector: torch.Tensor) -> torch.Tensor:
+        pass
+
+
+def error_squared_norm_fn(error_vector: torch.Tensor) -> torch.Tensor:
+    return (error_vector**2).sum(dim=1) / 2
+
+
 # If dtype is None, uses torch.get_default_dtype()
 class Objective:
     """An objective function to optimize."""
 
-    def __init__(self, dtype: Optional[torch.dtype] = None):
+    def __init__(
+        self,
+        dtype: Optional[torch.dtype] = None,
+        error_metric_fn: Optional[ErrorMetric] = None,
+        __allow_mixed_optim_aux_vars__: bool = False,  # experimental
+    ):
         # maps variable names to the variable objects
         self.optim_vars: OrderedDict[str, Manifold] = OrderedDict()
 
@@ -100,13 +123,20 @@ class Objective:
 
         self._vectorized = False
 
+        # Computes an aggregation function for the error vector derived from costs
+        # By default, this computes the squared norm of the error vector, divided by 2
+        self._error_metric_fn = (
+            error_metric_fn if error_metric_fn is not None else error_squared_norm_fn
+        )
+
+        self._allow_mixed_optim_aux_vars = __allow_mixed_optim_aux_vars__
+
     def _add_function_variables(
         self,
         function: TheseusFunction,
         optim_vars: bool = True,
         is_cost_weight: bool = False,
     ):
-
         if optim_vars:
             function_vars = function.optim_vars
             self_var_to_fn_map = self.functions_for_optim_vars
@@ -146,6 +176,9 @@ class Objective:
             # add to either self.optim_vars,
             # self.cost_weight_optim_vars or self.aux_vars
             self_vars_of_this_type[variable.name] = variable
+
+            if self._allow_mixed_optim_aux_vars and variable not in self_var_to_fn_map:
+                self_var_to_fn_map[variable] = []
 
             # add to list of functions connected to this variable
             self_var_to_fn_map[variable].append(function)
@@ -224,16 +257,17 @@ class Objective:
                 cost_function.aux_vars, cost_function.weight.aux_vars
             )
         ]
-        dual_var_err_msg = (
-            "Objective does not support a variable being both "
-            + "an optimization variable and an auxiliary variable."
-        )
-        for optim_name in optim_vars_names:
-            if self.has_aux_var(optim_name):
-                raise ValueError(dual_var_err_msg)
-        for aux_name in aux_vars_names:
-            if self.has_optim_var(aux_name):
-                raise ValueError(dual_var_err_msg)
+        if not self._allow_mixed_optim_aux_vars:
+            dual_var_err_msg = (
+                "Objective does not support a variable being both "
+                + "an optimization variable and an auxiliary variable."
+            )
+            for optim_name in optim_vars_names:
+                if self.has_aux_var(optim_name):
+                    raise ValueError(dual_var_err_msg)
+            for aux_name in aux_vars_names:
+                if self.has_optim_var(aux_name):
+                    raise ValueError(dual_var_err_msg)
 
     # returns a reference to the cost function with the given name
     def get_cost_function(self, name: str) -> CostFunction:
@@ -403,7 +437,9 @@ class Objective:
             if not also_update:
                 for var in self.optim_vars:
                     old_tensors[var] = self.optim_vars[var].tensor
-            self.update(input_tensors=input_tensors)
+            # Update vectorization only if the input tensors will be used for a
+            # persistent update.
+            self.update(input_tensors=input_tensors, _update_vectorization=also_update)
 
         # Current behavior when vectorization is on, is to always compute the error.
         # One could potentially optimize by only recompute when `input_tensors`` is
@@ -417,17 +453,34 @@ class Objective:
         )
 
         if input_tensors is not None and not also_update:
-            self.update(old_tensors)
+            # This line reverts back to the old tensors if a persistent update wasn't
+            # required (i.e., `also_update is False`).
+            # In this case, we pass _update_vectorization=False because
+            # vectorization wasn't updated in the first call to `update()`.
+            self.update(old_tensors, _update_vectorization=False)
         return error_vector
+
+    def error_metric(
+        self,
+        input_tensors: Optional[Dict[str, torch.Tensor]] = None,
+        also_update: bool = False,
+    ) -> torch.Tensor:
+        return self._error_metric_fn(
+            self.error(input_tensors=input_tensors, also_update=also_update)
+        )
 
     def error_squared_norm(
         self,
         input_tensors: Optional[Dict[str, torch.Tensor]] = None,
         also_update: bool = False,
     ) -> torch.Tensor:
-        return (
-            self.error(input_tensors=input_tensors, also_update=also_update) ** 2
-        ).sum(dim=1)
+        warnings.warn(
+            "Objective.error_squared_norm() is deprecated "
+            "and will be removed in future versions. "
+            "Please use Objective.error_metric() instead.",
+            DeprecationWarning,
+        )
+        return self.error_metric(input_tensors=input_tensors, also_update=also_update)
 
     def copy(self) -> "Objective":
         new_objective = Objective(dtype=self.dtype)
@@ -510,8 +563,8 @@ class Objective:
         self,
         input_tensors: Optional[Dict[str, torch.Tensor]] = None,
         batch_ignore_mask: Optional[torch.Tensor] = None,
+        _update_vectorization: bool = True,
     ):
-
         input_tensors = input_tensors or {}
         for var_name, tensor in input_tensors.items():
             if tensor.ndim < 2:
@@ -546,7 +599,8 @@ class Objective:
 
         # Check that the batch size of all tensors is consistent after update
         self._resolve_batch_size()
-        self.update_vectorization_if_needed()
+        if _update_vectorization:
+            self.update_vectorization_if_needed()
 
     def _vectorization_needs_update(self):
         num_updates = {name: v._num_updates for name, v in self._all_variables.items()}

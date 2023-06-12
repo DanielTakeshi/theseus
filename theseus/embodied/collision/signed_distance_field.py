@@ -22,6 +22,8 @@ class SignedDistanceField2D:
         cell_size: Union[float, torch.Tensor, Variable],
         sdf_data: Optional[Union[torch.Tensor, Variable]] = None,
         occupancy_map: Optional[Union[torch.Tensor, Variable]] = None,
+        occupancy_threshold: float = 0.75,
+        sdf_boundary_value: float = 0.0,
     ):
         if occupancy_map is not None:
             if sdf_data is not None:
@@ -29,21 +31,28 @@ class SignedDistanceField2D:
                     "Only one of sdf_data and occupancy_map should be provided."
                 )
             sdf_data = self._compute_sdf_data_from_map(
-                occupancy_map, SignedDistanceField2D.convert_cell_size(cell_size).tensor
+                occupancy_map,
+                SignedDistanceField2D.convert_cell_size(cell_size).tensor,
+                threshold=occupancy_threshold,
             )
         else:
             if sdf_data is None:
                 raise ValueError(
                     "Either sdf_data or argument occupancy_map should be provided."
                 )
+        self.origin: Point2
+        self.cell_size: Variable
+        self.sdf_data: Variable
         self.update_data(origin, sdf_data, cell_size)
         self._num_rows = sdf_data.shape[1]
         self._num_cols = sdf_data.shape[2]
+        self.sdf_boundary_value = sdf_boundary_value
 
     def _compute_sdf_data_from_map(
         self,
         occupancy_map_batch: Union[Variable, torch.Tensor],
         cell_size: torch.Tensor,
+        threshold: float = 0.75,
     ) -> Variable:
         if isinstance(occupancy_map_batch, Variable):
             occupancy_map_batch = occupancy_map_batch.tensor
@@ -62,7 +71,7 @@ class SignedDistanceField2D:
         for i in range(num_maps):
             occupancy_map = occupancy_map_batch[i]
 
-            cur_map = occupancy_map > 0.75
+            cur_map = occupancy_map > threshold
             cur_map = cur_map.int()
 
             if torch.max(cur_map) == 0:
@@ -209,7 +218,7 @@ class SignedDistanceField2D:
             + hrdiff * lcdiff * gather_sdf(lri, hci)
             + lrdiff * lcdiff * gather_sdf(hri, hci)
         )
-        dist[out_of_bounds_idx] = 0
+        dist[out_of_bounds_idx] = self.sdf_boundary_value
 
         # Compute the jacobians
 
@@ -230,3 +239,8 @@ class SignedDistanceField2D:
         jac1[out_of_bounds_idx] = 0
         jac2[out_of_bounds_idx] = 0
         return dist, torch.stack([jac1, jac2], dim=2)
+
+    def to(self, *args, **kwargs):
+        self.cell_size.to(*args, **kwargs)
+        self.origin.to(*args, **kwargs)
+        self.sdf_data.to(*args, **kwargs)

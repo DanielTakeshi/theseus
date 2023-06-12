@@ -69,9 +69,7 @@ def run_learning_loop(cfg):
     )
 
     motion_planner = theg.MotionPlanner(
-        cfg.optim_params.method,
-        cfg.optim_params.max_iters,
-        step_size=cfg.optim_params.step_size,
+        cfg.optim_params.init,
         map_size=cfg.img_size,
         epsilon_dist=cfg.obs_params.safety_dist + cfg.robot_radius,
         total_time=cfg.total_time,
@@ -110,7 +108,6 @@ def run_learning_loop(cfg):
         epoch_grad_norm = 0
         epoch_params_norm = 0
         for batch in data_loader:
-
             model_optimizer.zero_grad()
 
             start = batch["expert_trajectory"][:, :2, 0]
@@ -143,7 +140,7 @@ def run_learning_loop(cfg):
             motion_planner.objective.update(planner_inputs)
             initial_trajectory = motion_planner.get_trajectory()
             with torch.no_grad():
-                batch_error = motion_planner.objective.error_squared_norm().mean() / 2
+                batch_error = motion_planner.objective.error_metric().mean()
                 print(f"Planner MSE optim first: {batch_error.item() : 10.2f}")
 
             _, info = motion_planner.layer.forward(
@@ -164,14 +161,14 @@ def run_learning_loop(cfg):
                 )
 
             with torch.no_grad():
-                batch_error = motion_planner.objective.error_squared_norm().mean() / 2
+                batch_error = motion_planner.objective.error_metric().mean()
                 print(f"Planner MSE optim final: {batch_error.item() : 10.2f}")
 
             if cfg.do_learning:
                 gp_error, collision_error = motion_planner.get_total_squared_errors()
                 loss = 0
                 if cfg.use_mean_objective_as_loss:
-                    loss = motion_planner.objective.error_squared_norm().mean()
+                    loss = motion_planner.objective.error_metric().mean()
                     loss /= motion_planner.objective.dim()
                     loss *= cfg.obj_loss_weight
                     epoch_mean_objective_loss += loss.item()

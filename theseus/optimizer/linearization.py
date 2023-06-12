@@ -45,15 +45,15 @@ class Linearization(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def _linearize_hessian_impl(self):
+    def _linearize_hessian_impl(self, _detach_hessian: bool = False):
         pass
 
-    def linearize(self):
+    def linearize(self, _detach_hessian: bool = False):
         if not self.ordering.complete:
             raise RuntimeError(
                 "Attempted to linearize an objective with an incomplete variable order."
             )
-        self._linearize_hessian_impl()
+        self._linearize_hessian_impl(_detach_hessian=_detach_hessian)
 
     def hessian_approx(self):
         raise NotImplementedError(
@@ -75,3 +75,13 @@ class Linearization(abc.ABC):
     @property
     def Atb(self) -> torch.Tensor:
         return self._atb_impl()
+
+    # Returns self.A @ v
+    @abc.abstractmethod
+    def Av(self, v: torch.Tensor) -> torch.Tensor:
+        pass
+
+    # Returns diag(self.A^T @ self.A) * v
+    @abc.abstractmethod
+    def diagonal_scaling(self, v: torch.Tensor) -> torch.Tensor:
+        pass

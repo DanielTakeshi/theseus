@@ -26,12 +26,12 @@ device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
 def model(x, b):
-    return (b[..., :1] * x) ** 2 + b[..., 1:]
+    return b[..., :1] * x**2 + b[..., 1:]
 
 
 def model_grad(x, b):
-    g1 = 2 * (b[..., :1] * x) * x
-    g2 = b[..., 1:] * torch.ones_like(x)
+    g1 = x**2
+    g2 = torch.ones_like(x)
     return g1, g2
 
 
@@ -138,7 +138,9 @@ def create_qf_theseus_layer(
         linear_solver_cls=linear_solver_cls,
         max_iterations=max_iterations,
     )
-    assert isinstance(optimizer.linear_solver, linear_solver_cls)
+
+    if hasattr(optimizer, "linear_solver"):
+        assert isinstance(optimizer.linear_solver, linear_solver_cls)
     assert not objective.vectorized
 
     if force_vectorization:
@@ -195,13 +197,16 @@ def _run_optimizer_test(
     learning_method="default",
     force_vectorization=False,
     max_iterations=10,
+    lr=0.075,
+    loss_ratio_target=0.01,
 ):
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     print(f"_run_test_for: {device}")
     print(
         f"testing for optimizer {nonlinear_optimizer_cls.__name__}, "
         f"cost weight modeled as {cost_weight_model}, "
-        f"linear solver {linear_solver_cls.__name__}"
+        f"linear solver {linear_solver_cls.__name__ if linear_solver_cls is not None else None} "
+        f"learning method {learning_method}"
     )
 
     rng = torch.Generator(device=device)
@@ -233,7 +238,9 @@ def _run_optimizer_test(
         max_iterations=max_iterations,
     )
     layer_ref.to(device)
-    initial_coefficients = torch.ones(batch_size, 2, device=device) * 0.75
+    initial_coefficients = torch.ones(batch_size, 2, device=device) * torch.tensor(
+        [0.75, 7], device=device
+    )
     with torch.no_grad():
         input_values = {"coefficients": initial_coefficients}
         target_vars, _ = layer_ref.forward(
@@ -263,7 +270,7 @@ def _run_optimizer_test(
         def cost_weight_fn():
             return cost_weight_params.clone().view(1, -1)
 
-        optimizer = torch.optim.Adam([cost_weight_params], lr=0.075)
+        optimizer = torch.optim.Adam([cost_weight_params], lr=lr)
 
     elif cost_weight_model == "mlp":
         mlp = thutils.build_mlp(num_points, 20, num_points, 2).to(device)
@@ -272,7 +279,7 @@ def _run_optimizer_test(
         def cost_weight_fn():
             return mlp(dummy_input)
 
-        optimizer = torch.optim.Adam(mlp.parameters(), lr=0.075)
+        optimizer = torch.optim.Adam(mlp.parameters(), lr=lr)
 
     layer_to_learn = create_qf_theseus_layer(
         xs,
@@ -285,6 +292,7 @@ def _run_optimizer_test(
         max_iterations=max_iterations,
     )
     layer_to_learn.to(device)
+    layer_to_learn.verify_jacobians()
 
     # Check the initial solution quality to check how much has loss improved later
 
@@ -302,6 +310,7 @@ def _run_optimizer_test(
         pred_vars, info = layer_to_learn.forward(
             input_values, optimizer_kwargs=optimizer_kwargs
         )
+
         loss0 = F.mse_loss(
             pred_vars["coefficients"], target_vars["coefficients"]
         ).item()
@@ -320,8 +329,18 @@ def _run_optimizer_test(
             cost_weight_param_name: cost_weight_fn(),
         }
         pred_vars, info = layer_to_learn.forward(
-            input_values, optimizer_kwargs={**optimizer_kwargs, **{"verbose": verbose}}
+            input_values,
+            optimizer_kwargs={
+                **optimizer_kwargs,
+                **{
+                    "verbose": verbose,
+                    "backward_mode": "implicit"
+                    if learning_method == "direct"
+                    else "unroll",
+                },
+            },
         )
+
         assert not (
             (info.status == th.NonlinearOptimizerStatus.START)
             | (info.status == th.NonlinearOptimizerStatus.FAIL)
@@ -362,19 +381,46 @@ def _run_optimizer_test(
             loss = mse_loss
 
         loss.backward()
-        print("Loss: ", loss.item())
         optimizer.step()
 
-        if mse_loss.item() / loss0 < 1e-2:
+        loss_ratio = mse_loss.item() / loss0
+        print("Iteration: ", i, "Loss: ", mse_loss.item(), ". Loss ratio: ", loss_ratio)
+        if loss_ratio < loss_ratio_target:
             solved = True
             break
     assert solved
 
 
-@pytest.mark.parametrize("nonlinear_optim_cls", [th.GaussNewton, th.LevenbergMarquardt])
+def _solver_can_be_run(lin_solver_cls):
+    if lin_solver_cls == th.LUCudaSparseSolver:
+        if not torch.cuda.is_available():
+            return False
+        try:
+            import theseus.extlib.cusolver_lu_solver.CusolverLUSolver  # noqa: F401
+        except Exception:
+            return False
+    if lin_solver_cls == th.BaspachoSparseSolver:
+        try:
+            from theseus.extlib.baspacho_solver import (  # noqa: F401
+                SymbolicDecomposition,
+            )
+        except Exception:
+            return False
+    return True
+
+
+@pytest.mark.parametrize(
+    "nonlinear_optim_cls", [th.Dogleg, th.GaussNewton, th.LevenbergMarquardt, th.DCEM]
+)
 @pytest.mark.parametrize(
     "lin_solver_cls",
-    [th.CholeskyDenseSolver, th.LUDenseSolver, th.CholmodSparseSolver],
+    [
+        th.CholeskyDenseSolver,
+        th.LUDenseSolver,
+        th.CholmodSparseSolver,
+        th.LUCudaSparseSolver,
+        th.BaspachoSparseSolver,
+    ],
 )
 @pytest.mark.parametrize("use_learnable_error", [True, False])
 @pytest.mark.parametrize("cost_weight_model", ["direct", "mlp"])
@@ -386,6 +432,8 @@ def test_backward(
     cost_weight_model,
     learning_method,
 ):
+    if not _solver_can_be_run(lin_solver_cls):
+        return
     optim_kwargs = {
         th.GaussNewton: {},
         th.LevenbergMarquardt: {
@@ -393,11 +441,25 @@ def test_backward(
             "adaptive_damping": lin_solver_cls not in [th.CholmodSparseSolver]
             and learning_method not in "leo",
         },
+        th.Dogleg: {},
+        th.DCEM: {},
     }[nonlinear_optim_cls]
     if learning_method == "leo":
-        # CholmodSparseSolver doesn't support sampling from system's covariance
-        if lin_solver_cls == th.CholmodSparseSolver:
+        if lin_solver_cls not in [th.CholeskyDenseSolver, th.LUDenseSolver]:
+            # other solvers don't support sampling from system's covariance
             return
+        if nonlinear_optim_cls == th.Dogleg:
+            return  # LEO not working with Dogleg
+        if nonlinear_optim_cls == th.DCEM:
+            return
+    if nonlinear_optim_cls == th.Dogleg and lin_solver_cls != th.CholeskyDenseSolver:
+        return
+    if nonlinear_optim_cls == th.DCEM:
+        if lin_solver_cls != th.CholeskyDenseSolver:
+            return
+        else:
+            lin_solver_cls = None
+
     # test both vectorization on/off
     force_vectorization = torch.rand(1).item() > 0.5
     _run_optimizer_test(
@@ -408,7 +470,10 @@ def test_backward(
         use_learnable_error=use_learnable_error,
         force_vectorization=force_vectorization,
         learning_method=learning_method,
-        max_iterations=10,
+        max_iterations=10 if nonlinear_optim_cls != th.DCEM else 50,
+        lr=1.0
+        if nonlinear_optim_cls == th.Dogleg and not torch.cuda.is_available()
+        else 0.075,
     )
 
 

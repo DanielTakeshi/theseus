@@ -23,6 +23,7 @@ from theseus.geometry import LieGroup, Manifold
 from theseus.optimizer import Optimizer, OptimizerInfo
 from theseus.optimizer.linear import LinearSolver
 from theseus.optimizer.nonlinear import BackwardMode, GaussNewton
+from theseus.utils import check_jacobians
 
 
 class TheseusLayer(nn.Module):
@@ -146,6 +147,18 @@ class TheseusLayer(nn.Module):
     def dtype(self) -> torch.dtype:
         return self.objective.dtype
 
+    def verify_jacobians(self, num_checks: int = 1, tol: float = 1.0e-3):
+        success = True
+        for cf in self.objective.cost_functions.values():
+            try:
+                check_jacobians(cf, num_checks=num_checks, tol=tol)
+            except RuntimeError as e:
+                print(f"Jacobians check for cost function named {cf.name} failed.")
+                print(e)
+                success = False
+        if success:
+            print("Jacobians check were successful!")
+
 
 def _forward(
     objective: Objective,
@@ -201,7 +214,7 @@ class TheseusLayerDLMForward(torch.autograd.Function):
             # Precompute and cache this.
             with torch.enable_grad():
                 grad_sol = torch.autograd.grad(
-                    objective.error_squared_norm().sum(),
+                    objective.error_metric().sum(),
                     differentiable_tensors,
                     allow_unused=True,
                 )
@@ -253,7 +266,7 @@ class TheseusLayerDLMForward(torch.autograd.Function):
         # Compute gradients.
         with torch.enable_grad():
             grad_perturbed = torch.autograd.grad(
-                bwd_objective.error_squared_norm().sum(),
+                bwd_objective.error_metric().sum(),
                 differentiable_tensors,
                 allow_unused=True,
             )
@@ -289,7 +302,9 @@ class _DLMPerturbation(CostFunction):
         self.register_aux_vars(["epsilon", "grad"])
 
     def error(self) -> torch.Tensor:
-        err = (
+        # Theseus optimizes SUM(err ** 2) / 2. We add sqrt(2) so
+        # that when expanding the objective is SUM(err_orig) /2 + ||dlm_error||**2
+        err = np.sqrt(2) * (
             self.epsilon.tensor.view((-1,) + (1,) * (self.var.ndim - 1))
             * self.var.tensor
             - 0.5 * self.grad.tensor
@@ -298,7 +313,7 @@ class _DLMPerturbation(CostFunction):
 
     def jacobians(self) -> Tuple[List[torch.Tensor], torch.Tensor]:
         d = self.dim()
-        aux = (
+        aux = np.sqrt(2) * (
             torch.eye(d, dtype=self.epsilon.dtype, device=self.epsilon.device)
             .unsqueeze(0)
             .expand(self.var.shape[0], d, d)

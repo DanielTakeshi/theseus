@@ -60,7 +60,7 @@ def main(cfg):
     objective.add(pose_prior)
 
     objective.to(dtype)
-    optimizer = th.GaussNewton(
+    optimizer = th.LevenbergMarquardt(
         objective,
         max_iterations=10,
         step_size=1,
@@ -87,9 +87,7 @@ def main(cfg):
     log.info(f"Forward pass used {forward_mem} MBs.")
 
     results = {}
-    results["objective"] = (
-        objective.error_squared_norm().detach().cpu().numpy().sum() / 2
-    )
+    results["objective"] = objective.error_metric().detach().cpu().numpy().sum()
     results["R"] = torch.cat(
         [pose.tensor[:, :, :d].detach().cpu() for pose in verts]
     ).numpy()
