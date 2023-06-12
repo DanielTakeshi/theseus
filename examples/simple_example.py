@@ -13,6 +13,7 @@ def y_model(x, c):
     return c * torch.exp(x)
 
 
+# {(x1,y1), ..., (xn,yn)} where each 'yi' is generated from a formula.
 def generate_data(num_points=10, c=0.5):
     data_x = torch.linspace(-1, 1, num_points).view(1, -1)
     data_y = y_model(data_x, c)
@@ -31,6 +32,8 @@ y = th.Variable(y_true, name="y")
 v = th.Vector(1, name="v")  # a manifold subclass of Variable for optim_vars
 
 
+# Used for the optimizer, tells us how good our prediction of `v` is.
+# Remember the objective is to find a good `v` that describes the data.
 def error_fn(optim_vars, aux_vars):  # returns y - v * exp(x)
     x, y = aux_vars
     return y.tensor - optim_vars[0].tensor * torch.exp(x.tensor)
@@ -46,6 +49,9 @@ layer = th.TheseusLayer(th.GaussNewton(objective, max_iterations=10))
 
 phi = torch.nn.Parameter(x_true + 0.1 * torch.ones_like(x_true))
 outer_optimizer = torch.optim.Adam([phi], lr=0.001)
+
+# Run optimizer. The objective is to find the constant which describes y(x), which
+# is 0.5 by default. That is what theseus means by "curve fitting".
 for epoch in range(100):
     # Note: the `forward` method does the `update()` I think.
     # It combines `Objective.update()` and `Optimizer.optimize()`.
