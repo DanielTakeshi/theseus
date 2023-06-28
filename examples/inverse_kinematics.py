@@ -15,6 +15,7 @@
 import os
 
 import torch
+torch.set_printoptions(sci_mode=False, linewidth=150)
 
 import theseus as th
 from torchkin.forward_kinematics import Robot, get_forward_kinematics_fns
@@ -154,4 +155,27 @@ optimizer = th.LevenbergMarquardt(
 
 inputs = {"theta_opt": torch.zeros_like(theta_opt), "targeted_pose": target_pose}
 optimizer.objective.update(inputs)
-optimizer.optimize(verbose=True)
+info = optimizer.optimize(verbose=True)
+
+# Does not seem to return what I wanted ...
+print("\nAfter `optimizer.optimize`, here's the info:")
+print(info)
+
+# Daniel: maybe this is what I want? It was originally 0s, now it has values in it.
+# This must represent the solutions (it's the thing being optimized). IK has infinite
+# solutions, see the comment earlier, so in general we should not expect optim_vars
+# to exactly match target_theta.
+print('\nThe optimization variables:')
+print(optim_vars)
+print('\nCompare with `target_theta`:')
+print(target_theta)
+
+# But THESE, the poses, will match very closely!
+print('\nThe target poses from our optim variables:')
+(theta,) = optim_vars
+pose = th.SE3(tensor=fk(theta.tensor)[0])
+print(pose)         # type SE(3)
+print('\nCompare with `target_pose`:')
+print(target_pose)  # type Tensor
+# NOTE(daniel): we can't just do pose - target_pose due to incompatible types.
+# There's stuff like pose.to_matrix we could try out if needed but not a high priority.
