@@ -11,7 +11,11 @@ from typing import Callable, List, Optional, Sequence, Tuple, Union, cast
 
 import torch
 import torch.autograd.functional as autogradF
-from functorch import jacrev, vmap
+
+try:
+    from torch.func import jacrev, vmap
+except ModuleNotFoundError:
+    from functorch import jacrev, vmap  # type: ignore
 from typing_extensions import Protocol
 
 from theseus.geometry import Manifold
@@ -58,6 +62,8 @@ def masked_jacobians(
 # jacobian of the error, by implementing abstract methods
 # `error` and `jacobians`, respectively.
 class CostFunction(TheseusFunction, abc.ABC):
+    """A cost function in a differentiable optimization problem."""
+
     def __init__(
         self,
         cost_weight: CostWeight,
@@ -203,8 +209,10 @@ class AutoDiffCostFunction(CostFunction):
         cost_weight: Optional[CostWeight] = None,
         aux_vars: Optional[Sequence[Variable]] = None,
         name: Optional[str] = None,
+        autograd_create_graph: bool = True,
         autograd_strict: bool = False,
         autograd_vectorize: bool = False,
+        autograd_strategy: str = "reverse-mode",
         autograd_mode: Union[str, AutogradMode] = AutogradMode.VMAP,
     ):
         if cost_weight is None:
@@ -222,8 +230,10 @@ class AutoDiffCostFunction(CostFunction):
 
         self._err_fn = err_fn
         self._dim = dim
+        self._autograd_create_graph = autograd_create_graph
         self._autograd_strict = autograd_strict
         self._autograd_vectorize = autograd_vectorize
+        self._autograd_strategy = autograd_strategy
 
         # The following are auxiliary Variable objects to hold tensor data
         # during jacobian computation without modifying the original Variable objects
@@ -279,9 +289,10 @@ class AutoDiffCostFunction(CostFunction):
         return autogradF.jacobian(
             jac_fn,
             optim_tensors,
-            create_graph=True,
+            create_graph=self._autograd_create_graph,
             strict=self._autograd_strict,
             vectorize=self._autograd_vectorize,
+            strategy=self._autograd_strategy,
         )
 
     def _make_jac_fn_vmap(

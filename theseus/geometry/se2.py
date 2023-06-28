@@ -9,6 +9,7 @@ import torch
 
 import theseus.constants
 from theseus.geometry.lie_group_check import no_lie_group_check
+from theseus.global_params import _THESEUS_GLOBAL_PARAMS
 
 from .lie_group import LieGroup
 from .point_types import Point2
@@ -24,20 +25,22 @@ class SE2(LieGroup):
         tensor: Optional[torch.Tensor] = None,
         name: Optional[str] = None,
         dtype: Optional[torch.dtype] = None,
-        strict: bool = False,
+        strict_checks: bool = False,
+        disable_checks: bool = False,
     ):
         if x_y_theta is not None and tensor is not None:
             raise ValueError("Please provide only one of x_y_theta or tensor.")
         if x_y_theta is not None:
             dtype = x_y_theta.dtype
-        super().__init__(tensor=tensor, name=name, dtype=dtype, strict=strict)
+        super().__init__(
+            tensor=tensor,
+            name=name,
+            dtype=dtype,
+            strict_checks=strict_checks,
+            disable_checks=disable_checks,
+        )
         if x_y_theta is not None:
             self.update_from_x_y_theta(x_y_theta)
-
-        self._resolve_eps()
-
-    def _resolve_eps(self):
-        self._NEAR_ZERO_EPS = theseus.constants._SE2_NEAR_ZERO_EPS[self.tensor.dtype]
 
     @staticmethod
     def rand(
@@ -167,7 +170,9 @@ class SE2(LieGroup):
         cosine, sine = rotation.to_cos_sin()
 
         # Compute the approximations when theta is near to 0
-        small_theta = theta.abs() < self._NEAR_ZERO_EPS
+        small_theta = theta.abs() < _THESEUS_GLOBAL_PARAMS.get_eps(
+            "se2", "near_zero", theta.dtype
+        )
         non_zero = torch.ones(1, dtype=self.dtype, device=self.device)
         sine_nz = torch.where(small_theta, non_zero, sine)
         half_theta_by_tan_half_theta = (
@@ -192,18 +197,23 @@ class SE2(LieGroup):
             theta2 = theta**2
             theta3 = theta * theta2
 
-            theta_nz = torch.where(small_theta, non_zero, theta)
-            one_minus_cosine_nz = torch.where(small_theta, non_zero, 1 - cosine)
+            d_small_theta = theta.abs() < _THESEUS_GLOBAL_PARAMS.get_eps(
+                "se2", "d_near_zero", theta.dtype
+            )
+            theta_nz = torch.where(d_small_theta, non_zero, theta)
+            one_minus_cosine_nz = torch.where(d_small_theta, non_zero, 1 - cosine)
 
             half_theta_sine_by_one_minus_cosine = torch.where(
-                small_theta, 1 - theta2 / 12.0, half_theta * sine / one_minus_cosine_nz
+                d_small_theta,
+                1 - theta2 / 12.0,
+                half_theta * sine / one_minus_cosine_nz,
             )
             jac[:, [0, 1], [0, 1]] = half_theta_sine_by_one_minus_cosine.view(-1, 1)
             jac[:, 0, 1] = -half_theta
             jac[:, 1, 0] = half_theta
 
             coeff = torch.where(
-                small_theta,
+                d_small_theta,
                 theta / 12.0 + theta3 / 720.0,
                 1.0 / theta_nz - 0.5 * sine / one_minus_cosine_nz,
             )
@@ -236,8 +246,8 @@ class SE2(LieGroup):
         cosine, sine = rotation.to_cos_sin()
 
         # Compute the approximations when theta is near to 0
-        small_theta = (
-            theta.abs() < theseus.constants._SE2_NEAR_ZERO_EPS[tangent_vector.dtype]
+        small_theta = theta.abs() < _THESEUS_GLOBAL_PARAMS.get_eps(
+            "se2", "near_zero", tangent_vector.dtype
         )
         non_zero = torch.ones(
             1, dtype=tangent_vector.dtype, device=tangent_vector.device
@@ -318,7 +328,7 @@ class SE2(LieGroup):
         )
         return SE2(
             tensor=torch.cat([new_translation.tensor, new_rotation.tensor], dim=1),
-            strict=False,
+            disable_checks=True,
         )
 
     def _inverse_impl(self) -> "SE2":
@@ -464,7 +474,6 @@ class SE2(LieGroup):
     # calls to() on the internal tensors
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
-        self._resolve_eps()
 
 
 rand_se2 = SE2.rand

@@ -10,12 +10,12 @@
 # ROOT_DIR: is the directory where the Dockerfile, tar.gz and .whl files will be stored
 #   (under a new subdirectory named theseus_docker_3.9)
 # COMMIT: is a theseus commit hash or tag (e.g., 0.1.3).
-# CUDA_VERSION: the version of CUDA to use. We have tested 10.2, 11.3, 11.6, and 11.7.
+# CUDA_VERSION: the version of CUDA to use. We have tested 11.3, 11.6, and 11.7.
 #   You can also pass "cpu" to compile without CUDA extensions.
 # THESEUS_VERSION: defaults to COMMIT, otherwise it must match the version in the commit.
 # INCLUDE_LABS: if !=0, the compiled wheel also includes Theseus Labs.
 #   For example
-#    ./build_scripts/build_wheel.sh . 0.1.0 10.2
+#    ./build_scripts/build_wheel.sh . 0.1.4 11.3
 # NIGHTLY: if !=0, compiles a wheel for the nightly package (forces INCLUDE_LABS=1).
 #   THESEUS_VERSION and COMMIT are also ignored, since version is set to YYYY.MM.DD.
 #   and commit is set to `main`.
@@ -57,7 +57,7 @@ else
     GIT_CMD="git checkout ${COMMIT} -b tmp_build"
 fi
 
-SUPPORTED_CUDA_VERSIONS="10.2 11.3 11.6 11.7"
+SUPPORTED_CUDA_VERSIONS="11.3 11.6 11.7"
 CUDA_VERSION_IS_SUPPORTED=$(echo "cpu ${SUPPORTED_CUDA_VERSIONS}" | grep -w ${CUDA_VERSION})
 [ "${CUDA_VERSION_IS_SUPPORTED}" ] || die "CUDA_VERSION must be one of (cpu ${SUPPORTED_CUDA_VERSIONS})"
 
@@ -124,7 +124,7 @@ for PYTHON_VERSION in 3.10; do
         /bin/bash ~/miniconda.sh -b -p /opt/conda
     ENV PATH \$CONDA_DIR/bin:\$PATH
     RUN conda create --name theseus python=${PYTHON_VERSION}
-    RUN source activate theseus
+    ENV PATH \$CONDA_DIR/envs/theseus/bin:\$PATH
 
     # --- Install torch
     ENV CUDA_HOME /usr/local/cuda-${CUDA_VERSION}
@@ -158,9 +158,9 @@ for PYTHON_VERSION in 3.10; do
     # Copy the wheel to host
     CP_STR="cp"$(echo ${PYTHON_VERSION} | sed 's/[.]//g')
     DOCKER_WHL="theseus/dist/${WHL_NAME}-${TH_VERSION}-${CP_STR}-${CP_STR}-linux_x86_64.whl"
-    if [[ ${CUDA_VERSION} == "11.6" ]]
+    if [[ ${CUDA_VERSION} == "11.7" ]]
     then
-        PLUS_CU_TAG=""  # 11.6 will be the pypi version, so don't add +cu116
+        PLUS_CU_TAG=""  # 11.7 will be the pypi version, so don't add +cu117
     else
         PLUS_CU_TAG="+${DEVICE_TAG}"
     fi

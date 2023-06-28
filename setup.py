@@ -110,9 +110,9 @@ if nightly_date_str is not None:
 if is_nightly:
     version = nightly_date_str
 else:
-    with open(Path("theseus") / "__init__.py", "r") as f:
+    with open(Path("theseus") / "_version.py", "r") as f:
         for line in f:
-            if "__version__" in line:
+            if "__version__ = " in line:
                 version = line.split("__version__ = ")[1].rstrip().strip('"')
 
 with open("README.md", "r") as fh:
@@ -144,7 +144,7 @@ if compile_cuda_support:
                 str(root_dir / "theseus" / "extlib" / "cusolver_sp_defs.cpp"),
             ],
             include_dirs=[str(root_dir)],
-            libraries=["cusolver"],
+            libraries=["cusolver", "cusparse"],
         ),
     ]
 else:
@@ -154,10 +154,10 @@ baspacho_extension = maybe_create_baspacho_extension(compile_cuda_support)
 if baspacho_extension is not None:
     ext_modules.append(baspacho_extension)
 
-excluded_packages = []
+excluded_packages = ["torchlie", "torchlie.*", "tests*", "tests", "examples"]
 package_name = "theseus-ai-nightly" if is_nightly else "theseus-ai"
 if not os.environ.get("INCLUDE_THESEUS_LABS") and not is_nightly:
-    excluded_packages.append("theseus.labs")
+    excluded_packages.append("theseus.labs*")
     print("Excluding theseus.labs")
 setuptools.setup(
     name=package_name,
