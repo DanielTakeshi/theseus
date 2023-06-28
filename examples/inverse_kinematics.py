@@ -24,9 +24,9 @@ dtype = torch.float64
 
 # First we load the URDF file describing the robot and create a `Robot` object to
 # represent it in Python. The `Robot` class can be used to build a kinematics tree
-# of the robot.
+# of the robot. NOTE(daniel): I think the default path is wrong; it works after fixing.
 URDF_REL_PATH = (
-    "../../tests/theseus_tests/embodied/kinematics/data/panda_no_gripper.urdf"
+    "../tests/theseus_tests/embodied/kinematics/data/panda_no_gripper.urdf"
 )
 urdf_path = os.path.join(os.path.dirname(__file__), URDF_REL_PATH)
 robot = Robot.from_urdf_file(urdf_path, dtype)
@@ -79,10 +79,12 @@ def compute_delta_theta(jfk, theta, targeted_pose, use_body_jacobian):
 def run_ik_using_body_or_spatial_jacobian(
     jfk, batch_size, step_size, use_body_jacobian
 ):
+    # Daniel: just designed to generate random targets to test IK.
     target_theta = torch.rand(batch_size, robot.dof, dtype=dtype)
-    target_pose: torch.Tensor = fk(target_theta)[0]
-    theta_opt = torch.zeros_like(target_theta)
+    target_pose: torch.Tensor = fk(target_theta)[0]  # Daniel: it's a tuple w/one item
+    theta_opt = torch.zeros_like(target_theta)  # Daniel: starts from zero joint angles
     for _ in range(50):
+        # Daniel: wonder if this is similar to our other delta-computing code.
         delta_theta, error = compute_delta_theta(
             jfk, theta_opt, target_pose, use_body_jacobian
         )
@@ -110,7 +112,6 @@ print("---------------------------------------------------")
 print("Theseus Optimizer")
 print("---------------------------------------------------")
 
-
 # IK can also be solved as an optimization problem:
 #      min \|log(pose^-1 * targeted_pose)\|^2
 # as the following
@@ -120,14 +121,19 @@ def targeted_pose_error(optim_vars, aux_vars):
     pose = th.SE3(tensor=fk(theta.tensor)[0])
     return pose.local(targeted_pose)
 
-
-target_theta = torch.rand(10, robot.dof, dtype=dtype)
-target_pose: torch.Tensor = fk(target_theta)[0]
+# Daniel: optimization variables are the joint angles of the robot, auxiliary
+# ones are the targets. In our case, we shoud have a target, and we use Theseus
+# to figure out how to go there from a starting robot. The target_theta is for
+# getting a ground-truth target robot joint angles and corresponding positons.
+# This optimization will give us target joint angles, but how do we do this for
+# multiple time steps, as done in the motion planning examples?
+target_theta = torch.rand(10, robot.dof, dtype=dtype)   # (10,7)
+target_pose: torch.Tensor = fk(target_theta)[0]         # (10,3,4)
 theta_opt = torch.zeros_like(target_theta)
 optim_vars = (th.Vector(tensor=torch.zeros_like(theta_opt), name="theta_opt"),)
 aux_vars = (th.SE3(tensor=target_pose, name="targeted_pose"),)
 
-
+# Daniel: see Theseus tutorials.
 cost_function = th.AutoDiffCostFunction(
     optim_vars,
     targeted_pose_error,
