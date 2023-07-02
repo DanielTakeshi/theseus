@@ -25,13 +25,28 @@ dtype = torch.float64
 
 # First we load the URDF file describing the robot and create a `Robot` object to
 # represent it in Python. The `Robot` class can be used to build a kinematics tree
-# of the robot. NOTE(daniel): I think the default path is wrong; it works after fixing.
-URDF_REL_PATH = (
-    "../tests/theseus_tests/embodied/kinematics/data/panda_no_gripper.urdf"
-)
+# of the robot.
+option = 3
+if option == 1:
+    # NOTE(daniel): I think the default path is wrong; it works after fixing.
+    URDF_REL_PATH = (
+        "../tests/theseus_tests/embodied/kinematics/data/panda_no_gripper.urdf"
+    )
+    link_names = ["panda_virtual_ee_link"]
+elif option == 2:
+    # NOTE(daniel): not working, recursion error. :/
+    URDF_REL_PATH = (
+        "../tests/theseus_tests/embodied/kinematics/data/ur5_isaac_3.urdf"
+    )
+    link_names = ["tool0"]
+elif option == 3:
+    # NOTE(daniel): interestingly this works. It must be the translation joint.
+    URDF_REL_PATH = (
+        "../tests/theseus_tests/embodied/kinematics/data/ur5_isaac_1.urdf"
+    )
+    link_names = ["tool0"]
 urdf_path = os.path.join(os.path.dirname(__file__), URDF_REL_PATH)
 robot = Robot.from_urdf_file(urdf_path, dtype)
-link_names = ["panda_virtual_ee_link"]
 
 # We can get differentiable forward kinematics functions for specific links
 # by using `get_forward_kinematics_fns`. This function creates three differentiable
