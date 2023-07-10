@@ -3,10 +3,9 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import cProfile
-import io
+# SE(3) convention in this example is translation then rotation
+
 import logging
-import pstats
 import random
 import subprocess
 from typing import Dict, List, Type, Union, cast
@@ -19,33 +18,10 @@ from scipy.io import savemat
 
 import theseus as th
 import theseus.utils.examples as theg
-from theseus.utils import Timer
+from theseus.utils import Profiler, Timer
 
 # Logger
 log = logging.getLogger(__name__)
-
-
-# Simple wrapper to make cProfile profiler optional
-class Profiler:
-    def __init__(self, c_profiler: cProfile.Profile, active: bool):
-        self.c_profiler = c_profiler
-        self.active = active
-
-    def enable(self):
-        if self.active:
-            self.c_profiler.enable()
-
-    def disable(self):
-        if self.active:
-            self.c_profiler.disable()
-
-    def print(self):
-        if self.active:
-            s = io.StringIO()
-            sortby = pstats.SortKey.CUMULATIVE
-            ps = pstats.Stats(self.c_profiler, stream=s).sort_stats(sortby)
-            ps.print_stats()
-            print(s.getvalue())
 
 
 def print_histogram(
@@ -121,8 +97,8 @@ def run(cfg: omegaconf.OmegaConf):
     dtype = torch.float64
     pg, _ = theg.PoseGraphDataset.generate_synthetic_3D(
         num_poses=cfg.num_poses,
-        rotation_noise=cfg.rotation_noise,
         translation_noise=cfg.translation_noise,
+        rotation_noise=cfg.rotation_noise,
         loop_closure_ratio=cfg.loop_closure_ratio,
         loop_closure_outlier_ratio=cfg.loop_closure_outlier_ratio,
         batch_size=cfg.batch_size,
@@ -133,7 +109,7 @@ def run(cfg: omegaconf.OmegaConf):
 
     device = torch.device(cfg.device)
     dtype = torch.float64
-    profiler = Profiler(cProfile.Profile(), cfg.profile)
+    profiler = Profiler(cfg.profile)
     pg.to(device=device)
 
     with torch.no_grad():
